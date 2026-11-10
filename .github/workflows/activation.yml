@@ -1,0 +1,17 @@
+name: Request Unity activation file (run once, by hand)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  activation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: game-ci/unity-request-activation-file@v2
+        id: request
+        with:
+          unityVersion: 2022.3.62f1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.request.outputs.filePath }}
+          path: ${{ steps.request.outputs.filePath }}
