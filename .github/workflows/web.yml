@@ -1,0 +1,90 @@
+name: Tests, Unity WebGL build and deploy (GitHub Pages)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  rules:
+    name: Rules tests (no Unity needed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Art sources are up to date
+        run: python3 tools/gen_assets.py --check
+      - name: Install a C# compiler
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mono-mcs mono-runtime
+      - name: Game rules compile and pass
+        run: |
+          mcs -out:tests/core_tests.exe Assets/Scripts/Core/*.cs tests/CoreTests.cs
+          mono tests/core_tests.exe | tee rules.log
+          ! grep -q "FAIL" rules.log
+      - name: View code compiles against Unity API stubs
+        run: mcs -target:library -out:tests/view.dll Assets/Scripts/Core/*.cs Assets/Scripts/View/*.cs tests/stubs/UnityStubs.cs
+
+  build:
+    name: Unity WebGL build
+    needs: rules
+    runs-on: ubuntu-latest
+    outputs:
+      built: ${{ steps.flag.outputs.built }}
+    env:
+      UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+      UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+      UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+    steps:
+      - id: flag
+        name: Is a Unity license configured?
+        run: |
+          if [ -n "$UNITY_LICENSE" ]; then echo "built=true" >> "$GITHUB_OUTPUT";
+          else echo "built=false" >> "$GITHUB_OUTPUT"; echo "::notice::No UNITY_LICENSE secret: skipping the WebGL build (see README, 'Unity license')."; fi
+
+      - uses: actions/checkout@v4
+        if: steps.flag.outputs.built == 'true'
+
+      - uses: actions/cache@v4
+        if: steps.flag.outputs.built == 'true'
+        with:
+          path: Library
+          key: Library-WebGL-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: Library-WebGL-
+
+      - uses: game-ci/unity-builder@v4
+        if: steps.flag.outputs.built == 'true'
+        with:
+          targetPlatform: WebGL
+          unityVersion: 2022.3.62f1
+          buildMethod: CommunityWorld.EditorTools.BuildScript.BuildWebGL
+
+      - name: Prepare Pages artifact
+        if: steps.flag.outputs.built == 'true'
+        run: |
+          sudo chown -R "$USER" build || true
+          touch build/WebGL/.nojekyll
+          ls -la build/WebGL
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.flag.outputs.built == 'true'
+        with:
+          path: build/WebGL
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.built == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
